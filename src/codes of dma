@@ -1,0 +1,307 @@
+user controller
+
+
+@RestController
+@RequestMapping(path = "/auth_user/")
+public class UserAccountController extends BaseController {
+    @Autowired
+    UserAccountService userService;
+
+    @Autowired
+    RolePermissionService rolePermissionService;
+
+    @GetMapping("/register")
+    public ResponseEntity<?> getRolesAndPermissions(){
+          return success(rolePermissionService.getRolesAndPermissions());
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<?> registerUser(@RequestBody RegisterRequestDTO userRequest){
+        LoginResponseDTO user = userService.register(userRequest);
+//        return ResponseEntity.status(HttpStatus.CREATED).body(user);
+        return create(user);
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@RequestBody LoginRequestDTO loginRequest){
+        AuthResponseDTO responseDTO = userService.login(loginRequest);
+//        return ResponseEntity.status(HttpStatus.OK).body(responseDTO);
+        if(responseDTO.getStatus().equals("SUCCESS"))
+            return success("Login successful", responseDTO);
+        else
+            return success("Password Change Required", responseDTO);
+    }
+
+    @PostMapping("/change-password")
+    public ResponseEntity<?> changePassword(
+            @RequestBody LoginRequestDTO request) {
+        String pwdChange = userService.changePassword(request);
+//        return ResponseEntity.ok(pwdChange);
+        return success(pwdChange);
+    }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<?> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDTO request){
+
+        userService.forgotPassword(
+                request.getUserId(),
+                request.getEmailId()
+        );
+
+        return ResponseEntity.ok(
+                Map.of("message", "Temporary password has been sent to your email")
+        );
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        String token = null;
+
+        if (header != null && header.startsWith("Bearer ")) {
+            token = header.substring(7);
+        }
+
+        String msg = userService.logout(token);
+        return success(msg);
+    }
+}
+
+
+
+
+
+
+user service
+
+
+@Service
+public class UserAccountService {
+
+    @Autowired
+    private UserAccountRepository repo;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private AuthenticationManager authManager;
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private EmailService emailService;
+
+    @Autowired
+    private TokenBlacklistService tokenBlacklistService;
+
+    private static final Logger logger = LoggerFactory.getLogger(UserAccountService.class);
+
+    public LoginResponseDTO register(RegisterRequestDTO userRequest) {
+        User user = new User();
+        user.setUserId(userRequest.getUserId());
+        Optional<User> existingUser = repo.findByUserId(userRequest.getUserId());
+        if (existingUser.isPresent()) {
+            throw new UserAlreadyExistsException("User already registered with given username: " + userRequest.getUserId());
+        }
+        // Check if email already exists
+        Optional<User> existingUserByEmail = repo.findByEmailId(userRequest.getEmailId());
+        if (existingUserByEmail.isPresent()) {
+            throw new UserAlreadyExistsException(
+                    "Email already registered: " + userRequest.getEmailId());
+        }
+
+//        String encode = passwordEncoder.encode(userRequest.getPassword());
+        user.setPassword(null);
+        user.setRole(userRequest.getRole());
+        user.setEmailId(userRequest.getEmailId());
+        user.setPhoneNumber(String.valueOf(userRequest.getPhoneNumber()));
+        user.setPermissions(userRequest.getPermissions());
+        String tempPassword = generateTempPassword();
+
+        // Saving encrypted temporary password
+        user.setTempPassword(Objects.requireNonNull(passwordEncoder.encode(tempPassword)).substring(0,10));
+        user.setFirstLogin(true);
+        User savedUser = repo.save(user);
+        logger.info("User created with ID : {}", savedUser.getId());
+
+//        emailService.sendTempPassword(savedUser.getEmailId(), tempPassword);
+
+        logger.info("TEMP PASSWORD: {}", tempPassword);
+
+        LoginResponseDTO dto = new LoginResponseDTO(savedUser.getId(), savedUser.getUserId(),user.getTempPassword());
+        return dto;
+    }
+
+    public AuthResponseDTO login(LoginRequestDTO loginRequest) {
+
+        logger.info("Login attempt for userId: {}", loginRequest.getUserId());
+
+        User user = repo.findByUserId(loginRequest.getUserId())
+                .orElseThrow(() -> {
+                    logger.warn("User not found: {}", loginRequest.getUserId());
+                    return new RuntimeException("User not found");
+                });
+
+        //First time login
+        if (user.isFirstLogin()) {
+            logger.info("First time login detected for userId: {}", user.getUserId());
+            if (!passwordEncoder.matches(loginRequest.getPassword(), user.getTempPassword())) {
+                logger.warn("Invalid temp password attempt for userId: {}", user.getUserId());
+                throw new InvalidCredentialsException("Invalid temp password");
+            }
+            logger.info("First time login successful, password change required for userId: {}", user.getUserId());
+            return new AuthResponseDTO("PASSWORD_CHANGE_REQUIRED");
+        }
+
+
+        //1. normal login
+        try {
+            logger.info("Attempting authentication for userId and password : {} / {}", user.getUserId(),user.getPassword());
+            logger.info("***** Matching incoming and stored passwords:***{}::::{}***", loginRequest.getPassword(),user.getPassword());
+//            Authentication auth = authManager.authenticate(
+//                    new UsernamePasswordAuthenticationToken(
+//                            loginRequest.getUserId(),
+//                            loginRequest.getPassword()
+//                    )
+//            );
+
+            // 2. Get username safely from principal
+//            UserDetails userDetails = (UserDetails) auth.getPrincipal();
+//            logger.info("Authentication successful for userId: {}", user.getUserId());
+
+            // 3. Generate JWT token
+            String token = jwtUtil.generateToken(user.getUserId(),user.getRole(), user.getPermissions());
+            logger.info("Succesful Login : JWT token generated for userId: {}", user.getUserId());
+            return new AuthResponseDTO(user.getUserId(), token, Role.valueOf(user.getRole()));
+        } catch (BadCredentialsException e) {
+            logger.warn("Invalid login attempt for userId: {}", loginRequest.getUserId());
+            throw new InvalidCredentialsException("Invalid username or password");
+        } catch (Exception e) {
+            logger.error("Unexpected error during login for userId: {}", loginRequest.getUserId(), e);
+            throw e;
+        }
+    }
+
+    public void forgotPassword(String userId, String emailId) {
+        logger.info("Forgot password request received for userId: {}, emailId: {}", userId, emailId);
+
+        User user = repo
+                .findByUserIdAndEmailId(userId, emailId)
+                .orElseThrow(() -> {
+                    logger.warn("Invalid forgot password attempt for userId: {}, emailId: {}", userId, emailId);
+                    return new InvalidCredentialsException("Invalid userId or emailId");
+                });
+
+        // Generate temporary password
+        String tempPassword = generateTempPassword();
+
+        logger.debug("Generated temporary password for userId {}: {}", user.getUserId(), tempPassword);
+
+        user.setTempPassword(passwordEncoder.encode(tempPassword));
+        user.setFirstLogin(true); //force password change
+        repo.save(user);
+
+        logger.info("Temporary password set and user marked for first login password change for userId: {}", user.getUserId());
+
+        // Send email
+//        emailService.sendTempPassword(emailId, tempPassword);
+        logger.info("Temporary password email would be sent to: {}", emailId);
+    }
+
+    private String generateTempPassword() {
+        return UUID.randomUUID().toString()
+                .replace("-", "")
+                .substring(0, 8); // 8-char temp password
+    }
+
+    public String changePassword(LoginRequestDTO request) {
+        User user = repo.findByUserId(request.getUserId())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if(!request.getTempPassword().equals(user.getTempPassword())) {
+            throw new RuntimeException("Passwords don't match");
+        }
+            user.setPassword(passwordEncoder.encode(request.getPassword()));
+            user.setTempPassword(null);
+            user.setFirstLogin(false);
+
+        repo.save(user);
+
+        return "Password changed successfully";
+    }
+
+    /**
+     * LOGOUT: Blacklist the token, so it cannot be reused.
+     */
+    public String logout(String token) {
+        if (token == null || token.isBlank()) {
+            logger.warn("Logout called without token");
+            return "Token not provided";
+        }
+
+        try {
+            long expiryEpochSeconds = jwtUtil.getExpirationEpochSeconds(token);
+            tokenBlacklistService.blacklistToken(token, expiryEpochSeconds);
+
+            logger.info("Logout successful, token blacklisted until {}", expiryEpochSeconds);
+            return "Logout successful";
+        } catch (Exception e) {
+            logger.warn("Logout failed: invalid token. {}", e.getMessage());
+            return "Invalid token";
+        }
+    }
+}
+
+
+
+repo
+
+@Repository
+public interface UserAccountRepository extends JpaRepository<User, Long> {
+    Optional<User> findByUserId(String userId);
+
+    Optional<User> findByUserIdAndEmailId(String userId, String emailId);
+
+    Optional<User> findByEmailId(String emailId);
+}
+
+
+permission repo
+
+public interface PermissionsRepository extends JpaRepository<Permissions, Long> {
+}
+
+
+roles repo
+@Repository
+public interface RolesRepository extends JpaRepository<Roles, Long>{
+
+ }
+
+
+
+  reoles permission service
+*/
+@Service
+public class RolePermissionService {
+
+    @Autowired
+    private RolesRepository rolesRepository;
+    @Autowired
+    private PermissionsRepository permissionRepository;
+
+    private static final Logger logger = LoggerFactory.getLogger(RolePermissionService.class);
+
+    public RolesPermissionDTO getRolesAndPermissions(){
+
+        RolesPermissionDTO rolesPermissionDTO = new RolesPermissionDTO();
+
+        rolesPermissionDTO.setRolesList(rolesRepository.findAll());
+        rolesPermissionDTO.setPermissionsList(permissionRepository.findAll());
+
+        return rolesPermissionDTO;
+    }
+}
+
