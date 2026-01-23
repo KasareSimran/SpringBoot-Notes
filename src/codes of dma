@@ -305,3 +305,63 @@ public class RolePermissionService {
     }
 }
 
+
+
+// Created by Chetan
+@RestController
+@RequestMapping("/master")
+public class MasterDataController {
+ 
+    private final RolesRepository rolesRepository;
+    private final CountryCodeRepository countryCodeRepository;
+    private final LocationRepository locationRepository;
+    private final DepartmentRepository departmentRepository;
+    private final SubDepartmentRepository subDepartmentRepository;
+ 
+    public MasterDataController(RolesRepository rolesRepository,
+                                CountryCodeRepository countryCodeRepository,
+                                LocationRepository locationRepository,
+                                DepartmentRepository departmentRepository,
+                                SubDepartmentRepository subDepartmentRepository) {
+        this.rolesRepository = rolesRepository;
+        this.countryCodeRepository = countryCodeRepository;
+        this.locationRepository = locationRepository;
+        this.departmentRepository = departmentRepository;
+        this.subDepartmentRepository = subDepartmentRepository;
+    }
+ 
+    @GetMapping("/roles")
+    public List<RoleOptionDTO> roles() {
+        return rolesRepository.findAll().stream()
+                .map(r -> new RoleOptionDTO(r.getId(), r.getRole()))
+                .toList();
+    }
+ 
+    @GetMapping("/countries")
+    public List<CountryOptionDTO> countries() {
+        return countryCodeRepository.findAll().stream()
+                .map(c -> new CountryOptionDTO(c.getId(), c.getName(), c.getCallingCode()))
+                .toList();
+    }
+ 
+    @GetMapping("/locations")
+    public List<SimpleOptionDTO> locations() {
+        return locationRepository.findAll().stream()
+                .map(l -> new SimpleOptionDTO(l.getId(), l.getName()))
+                .toList();
+    }
+ 
+    @GetMapping("/departments")
+    public List<SimpleOptionDTO> departments() {
+        return departmentRepository.findAll().stream()
+                .map(d -> new SimpleOptionDTO(d.getId(), d.getName()))
+                .toList();
+    }
+ 
+    @GetMapping("/subdepartments")
+    public List<SimpleOptionDTO> subdepartments(@RequestParam Long departmentId) {
+        return subDepartmentRepository.findByDepartmentId(departmentId).stream()
+                .map(sd -> new SimpleOptionDTO(sd.getId(), sd.getName()))
+                .toList();
+    }
+}
