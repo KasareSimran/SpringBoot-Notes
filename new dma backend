@@ -1,0 +1,724 @@
+
+/**
+ * This is a User controller which handles all requests for registering new user and has all end-points required for login.
+ *
+ */
+
+@RestController
+@RequestMapping(path = "/auth_user/")
+public class UserAccountController extends BaseController {
+    @Autowired
+    UserAccountService userService;
+
+    @Autowired
+    RolePermissionService rolePermissionService;
+
+    @GetMapping("/register")
+    public ResponseEntity<?> getRolesAndPermissions(){
+          return success(rolePermissionService.getRolesAndPermissions());
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<?> registerUser(@RequestBody RegisterRequestDTO userRequest){
+        LoginResponseDTO user = userService.register(userRequest);
+//        return ResponseEntity.status(HttpStatus.CREATED).body(user);
+        return create(user);
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@RequestBody LoginRequestDTO loginRequest){
+        AuthResponseDTO responseDTO = userService.login(loginRequest);
+//        return ResponseEntity.status(HttpStatus.OK).body(responseDTO);
+        if(responseDTO.getStatus().equals("SUCCESS"))
+            return success("Login successful", responseDTO);
+        else
+            return success("Password Change Required", responseDTO);
+    }
+
+    @PostMapping("/change-password")
+    public ResponseEntity<?> changePassword(
+            @RequestBody LoginRequestDTO request) {
+        String pwdChange = userService.changePassword(request);
+//        return ResponseEntity.ok(pwdChange);
+        return success(pwdChange);
+    }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<?> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDTO request){
+
+        userService.forgotPassword(
+                request.getUserId(),
+                request.getEmailId()
+        );
+
+        return ResponseEntity.ok(
+                Map.of("message", "Temporary password has been sent to your email")
+        );
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        String token = null;
+
+        if (header != null && header.startsWith("Bearer ")) {
+            token = header.substring(7);
+        }
+
+        String msg = userService.logout(token);
+        return success(msg);
+    }
+}
+
+
+
+
+@RestController
+@RequestMapping("/user_management")
+public class UserManagementController extends BaseController{
+
+    private static final Logger logger = LoggerFactory.getLogger(UserManagementController.class);
+
+    @Autowired
+    private UserManagementService userManagementService;
+
+    @Autowired
+    private RoleService roleService;
+
+    @Autowired
+    UserAccountService userService;
+
+    @Autowired
+    private DropdownService dropdownService;
+
+
+//    @PostMapping("/create_module_action")
+//    public ResponseEntity<?> create(@RequestBody List<ModuleDTO> moduleDTOList) throws Exception{
+//        userManagementService.createModuleAndAction(moduleDTOList);
+//        return success("Module created successfully.");
+//    }
+
+//    @PutMapping("/update")
+//    public ResponseEntity<?>updateUser(@RequestBody UpdateUserDTO updateUserDTO){
+//        UpdateUserDTO updated = userService.updateUser(updateUserDTO);
+//        return success("Update Successfully");
+//    }
+
+    @PostMapping("/createrole")
+    ResponseEntity<?>createRole(@RequestBody RoleCreateRequest roleCreateRequest){
+        RoleCreateResponse roleCreateResponse = roleService.createRole(roleCreateRequest);
+        return create(roleCreateResponse);
+    }
+
+
+    @GetMapping("/getallmodulechildmodules")
+    public ResponseEntity<?> getAllModuleChildModuleResponse() {
+        return success(roleService.getAllModuleChildModuleResponse());
+    }
+
+//    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/getallroles")
+    public ResponseEntity<?>getAllRoles(){
+        return success(roleService.getAllRoles());
+    }
+
+
+    @PutMapping("/{roleId}")
+    public ResponseEntity<?> updateRole(
+            @PathVariable Long roleId,
+            @Valid @RequestBody RoleCreateRequest request) {
+        RoleResponse updated = roleService.updateRole(roleId, request);
+        return success("Update Role Successfully",updated);
+    }
+
+    @PatchMapping("/roles/status/{id}")
+    public ResponseEntity<?>updateStatus(@PathVariable Long id, @RequestBody UserStatusUpdateRequestDTO request){
+            roleService.updateStatus(id,request.isActive());
+            return success("Role status updated successfully");
+    }
+
+    // Added by Chetan
+//    @PreAuthorize("hasRole('ADMIN')")
+    @PatchMapping("/users/{userId}/status")
+    public ResponseEntity<?> updateUserStatus(
+            @PathVariable String userId,
+            @RequestBody UserStatusUpdateRequestDTO request) {
+
+        userService.updateUserActiveStatus(userId, request.isActive());
+        return success("User status updated successfully");
+    }
+
+
+//    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/users")
+    public ResponseEntity<?> getAllUsers() {
+        List<UserListItemDTO> users = userService.getAllUsersList();
+        return success(users);
+    }
+
+//    @PreAuthorize("hasRole('ADMIN')")
+    @PutMapping("/users/{id}")
+    public ResponseEntity<?> updateUserById(
+            @PathVariable Long id,
+            @RequestBody PutUserRequestDTO dto) {
+
+        UserListItemDTO updated = userService.putUserById(id, dto);
+        return success("User updated successfully", updated);
+    }
+
+
+    @GetMapping("/all")
+    public ResponseEntity<?> getAllDropdowns() {
+        return success(dropdownService.getAllDropdowns());
+    }
+
+    @GetMapping("/editall")
+    public ResponseEntity<?> getAllEditDropdowns(){
+        return success(dropdownService.geteditdropdown());
+    }
+}
+
+
+
+
+
+
+@Service
+public class UserAccountService {
+
+    @Autowired
+    private UserAccountRepository repo;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private AuthenticationManager authManager;
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private EmailService emailService;
+
+    @Autowired
+    private CountryCodeRepository countryCodeRepository;
+
+    @Autowired
+    private RolesRepository rolesRepository;
+
+    @Autowired
+    private ModuleRepository moduleRepository;
+
+    @Autowired
+    private ChildModuleRepository childModuleRepository;
+
+    @Autowired
+    private TokenBlacklistService tokenBlacklistService;
+
+    // Added by Chetan
+
+    @Autowired private LocationRepository locationRepository;
+    @Autowired private DepartmentRepository departmentRepository;
+    @Autowired private SubDepartmentRepository subDepartmentRepository;
+
+    private static final Logger logger = LoggerFactory.getLogger(UserAccountService.class);
+
+    public LoginResponseDTO register(RegisterRequestDTO userRequest) {
+        User user = new User();
+        user.setUserId(userRequest.getUserId());
+        Optional<User> existingUser = repo.findByUserId(userRequest.getUserId());
+        if (existingUser.isPresent()) {
+            throw new UserAlreadyExistsException("User already registered with given username: " + userRequest.getUserId());
+        }
+        // Check if email already exists
+        Optional<User> existingUserByEmail = repo.findByEmailId(userRequest.getEmailId());
+        if (existingUserByEmail.isPresent()) {
+            throw new UserAlreadyExistsException(
+                    "Email already registered: " + userRequest.getEmailId());
+        }
+
+//        String encode = passwordEncoder.encode(userRequest.getPassword());
+        user.setPassword(null);
+
+        user.setEmailId(userRequest.getEmailId());
+        user.setPhoneNumber(userRequest.getPhoneNumber());
+//        user.setPermissions(userRequest.getPermissions());
+
+        user.setName(userRequest.getName());
+        CountryCode country = countryCodeRepository.findById(userRequest.getCountryId())
+                .orElseThrow(() -> new RuntimeException("Country not found with id: " + userRequest.getCountryId()));
+        user.setCountry(country);
+
+        Roles role = rolesRepository.findById(userRequest.getRoleId())
+                .orElseThrow(() -> new RuntimeException("Role not found with id: " + userRequest.getRoleId()));
+        user.setRole(role);
+        user.setActive(true);
+
+        String adminUserId = getCurrentAdminUserId();
+        user.setCreatedBy(adminUserId);
+        user.setUpdatedBy(adminUserId);
+//        user.setCreatedAt(LocalDateTime.now());
+
+        String tempPassword = generateTempPassword();
+
+        // Saving encrypted temporary password
+        user.setTempPassword(Objects.requireNonNull(passwordEncoder.encode(tempPassword)).substring(0,10));
+        user.setFirstLogin(true);
+
+//      Added By chetan
+        if (userRequest.getLocationId() != null) {
+            Location location = locationRepository.findById(userRequest.getLocationId())
+                    .orElseThrow(() -> new RuntimeException("Location not found: " + userRequest.getLocationId()));
+            user.setLocation(location);
+        }
+
+        if (userRequest.getDepartmentId() != null) {
+            Department dept = departmentRepository.findById(userRequest.getDepartmentId())
+                    .orElseThrow(() -> new RuntimeException("Department not found: " + userRequest.getDepartmentId()));
+            user.setDepartment(dept);
+        }
+
+        if (userRequest.getSubdepartmentId() != null) {
+            SubDepartment sub = subDepartmentRepository.findById(userRequest.getSubdepartmentId())
+                    .orElseThrow(() -> new RuntimeException("SubDepartment not found: " + userRequest.getSubdepartmentId()));
+            user.setSubdepartment(sub);
+        }
+        User savedUser = repo.save(user);
+        logger.info("User created with ID : {}", savedUser.getId());
+
+//        emailService.sendTempPassword(savedUser.getEmailId(), tempPassword);
+
+        logger.info("TEMP PASSWORD: {}", tempPassword);
+
+        LoginResponseDTO dto = new LoginResponseDTO(savedUser.getUserId(),user.getTempPassword());
+        return dto;
+    }
+
+    public AuthResponseDTO login(LoginRequestDTO loginRequest) {
+
+        logger.info("Login attempt for userId: {}", loginRequest.getUserId());
+
+        User user = repo.findByUserId(loginRequest.getUserId())
+                .orElseThrow(() -> {
+                    logger.warn("User not found: {}", loginRequest.getUserId());
+                    return new RuntimeException("User not found");
+                });
+
+        if (!user.isActive()) {
+            throw new DisabledException("Your account is inactive. Please contact the admin.");
+        }
+
+        //First time login
+        if (user.isFirstLogin()) {
+            logger.info("First time login detected for userId: {}", user.getUserId());
+            if (!passwordEncoder.matches(loginRequest.getPassword(), user.getTempPassword())) {
+                logger.warn("Invalid temp password attempt for userId: {}", user.getUserId());
+                throw new InvalidCredentialsException("Invalid temp password");
+            }
+            logger.info("First time login successful, password change required for userId: {}", user.getUserId());
+            return new AuthResponseDTO("PASSWORD_CHANGE_REQUIRED");
+        }
+
+
+        //1. normal login
+        try {
+            logger.info("Attempting authentication for userId and password : {} / {}", user.getUserId(),user.getPassword());
+            logger.info("***** Matching incoming and stored passwords:***{}::::{}***", loginRequest.getPassword(),user.getPassword());
+            Authentication auth = authManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(
+                            loginRequest.getUserId(),
+                            loginRequest.getPassword()
+                    )
+            );
+
+            // 2. Get username safely from principal
+            UserDetails userDetails = (UserDetails) auth.getPrincipal();
+            logger.info("Authentication successful for userId: {}", user.getUserId());
+
+            // 3. Generate JWT token
+            String token = jwtUtil.generateToken(userDetails.getUsername(),user.getRole().getRole(),user.getRole().getModuleChildModule());
+            logger.info("Succesful Login : JWT token generated for userId: {}", user.getUserId());
+
+
+            // -------- Build role response with moduleName + childName --------
+            Roles role = user.getRole();
+
+            // 1) Collect unique moduleIds
+            List<Long> moduleIds = role.getModuleChildModule()
+                    .stream()
+                    .map(mg -> mg.getModule())              // moduleId
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList();
+
+            logger.info("*****moduleid********{}",moduleIds.stream().toList());
+
+            // 2) Collect unique childIds
+            List<Long> childIds = role.getModuleChildModule()
+                    .stream()
+                    .flatMap(mg -> mg.getChildModule().stream())
+                    .map(cm -> cm.getId())                  // childId
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList();
+            logger.info("*****childmoduleid********{}",childIds.stream().toList());
+            // 3) Fetch module names
+            Map<Long, String> moduleIdToName = moduleRepository.findAllById(moduleIds)
+                    .stream()
+                    .collect(Collectors.toMap(
+                            Module::getId,
+                            Module::getModule,
+                            (a, b) -> a
+                    ));
+
+            // 4) Fetch child namee
+            Map<Long, String> childIdToName = childModuleRepository.findAllById(childIds)
+                    .stream()
+                    .collect(Collectors.toMap(
+                            ChildModule::getId,
+                            ChildModule::getChildModule,
+                            (a, b) -> a
+                    ));
+
+            // 5) mapping
+            GetRoleResponse roleInfo = RoleMapper.toGetRoleResponse(role, moduleIdToName, childIdToName);
+
+            logger.info("*********gerroleresponse***{}",roleInfo.toString());
+            return new AuthResponseDTO(user.getUserId(), token, roleInfo,user.getName());
+        }
+        catch (DisabledException e) { // Added by Chetan
+            throw new UserInactiveException("User is inactive. Please contact admin.");
+        }
+        catch (BadCredentialsException e) {
+            logger.warn("Invalid login attempt for userId: {}", loginRequest.getUserId());
+            throw new InvalidCredentialsException("Invalid username or password");
+        } catch (Exception e) {
+            logger.error("Unexpected error during login for userId: {}", loginRequest.getUserId(), e);
+            throw e;
+        }
+    }
+
+    public void forgotPassword(String userId, String emailId) {
+        logger.info("Forgot password request received for userId: {}, emailId: {}", userId, emailId);
+
+        User user = repo
+                .findByUserIdAndEmailId(userId, emailId)
+                .orElseThrow(() -> {
+                    logger.warn("Invalid forgot password attempt for userId: {}, emailId: {}", userId, emailId);
+                    return new InvalidCredentialsException("Invalid userId or emailId");
+                });
+
+        // Generate temporary password
+        String tempPassword = generateTempPassword();
+
+        logger.debug("Generated temporary password for userId {}: {}", user.getUserId(), tempPassword);
+
+        user.setTempPassword(passwordEncoder.encode(tempPassword));
+        user.setFirstLogin(true); //force password change
+        repo.save(user);
+
+        logger.info("Temporary password set and user marked for first login password change for userId: {}", user.getUserId());
+
+        // Send email
+//        emailService.sendTempPassword(emailId, tempPassword);
+        logger.info("Temporary password email would be sent to: {}", emailId);
+    }
+
+    private String generateTempPassword() {
+        return UUID.randomUUID().toString()
+                .replace("-", "")
+                .substring(0, 8); // 8-char temp password
+    }
+
+    public String changePassword(LoginRequestDTO request) {
+        User user = repo.findByUserId(request.getUserId())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if(!request.getTempPassword().equals(user.getTempPassword())) {
+            throw new RuntimeException("Passwords don't match");
+        }
+            user.setPassword(passwordEncoder.encode(request.getPassword()));
+            user.setTempPassword(null);
+            user.setFirstLogin(false);
+
+        repo.save(user);
+
+        return "Password changed successfully";
+    }
+
+    /**
+     * LOGOUT: Blacklist the token, so it cannot be reused.
+     */
+    public String logout(String token) {
+        if (token == null || token.isBlank()) {
+            logger.warn("Logout called without token");
+            return "Token not provided";
+        }
+
+        try {
+            long expiryEpochSeconds = jwtUtil.getExpirationEpochSeconds(token);
+            tokenBlacklistService.blacklistToken(token, expiryEpochSeconds);
+
+            logger.info("Logout successful, token blacklisted until {}", expiryEpochSeconds);
+            return "Logout successful";
+        } catch (Exception e) {
+            logger.warn("Logout failed: invalid token. {}", e.getMessage());
+            return "Invalid token";
+        }
+    }
+
+    public List<GetUserResponse>getAllUsers(){
+        List<User> allUsers = repo.findAll();
+        return allUsers.stream()
+                .map(UserMapper::toGetUserResponse)
+                .toList();
+    }
+
+    public List<UserListItemDTO> getAllUsersList() {
+        return repo.findAllWithRefs().stream()
+                .map(this::toUserListItemDTO)
+                .toList();
+    }
+
+    @Transactional
+    public void updateUserActiveStatus(String targetUserId, boolean active) {
+        User target = repo.findByUserId(targetUserId)
+                .orElseThrow(() -> new RuntimeException("User not found: " + targetUserId));
+
+        String adminUserId = getCurrentAdminUserId();
+
+        target.setActive(active);
+        target.setUpdatedBy(adminUserId);
+
+        repo.save(target);
+    }
+
+    private String getCurrentAdminUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+
+        if (auth == null || !auth.isAuthenticated() || auth.getPrincipal() == null) {
+            throw new RuntimeException("Unauthorized: Admin context not found");
+        }
+
+        Object principal = auth.getPrincipal();
+
+        if (principal instanceof UserDetails userDetails) {
+            return userDetails.getUsername(); // should be userId
+        }
+
+        return auth.getName(); // fallback
+    }
+
+    private UserListItemDTO toUserListItemDTO(User u) {
+        return new UserListItemDTO(
+                u.getId(),
+                u.getUserId(),
+                u.getName(),
+                u.getEmailId(),
+                u.getPhoneNumber(),
+                u.isActive(),
+                u.getCreatedAt(),
+                u.getUpdatedAt(),
+                u.getCreatedBy(),
+                u.getUpdatedBy(),
+
+                u.getRole() != null
+                        ? new RoleRefDTO(u.getRole().getId(), u.getRole().getRole())
+                        : null,
+
+                u.getCountry() != null
+                        ? new CountryRefDTO(u.getCountry().getId(),u.getCountry().getName(), u.getCountry().getCallingCode())
+                        : null,
+
+                u.getLocation() != null
+                        ? new NamedRefDTO(u.getLocation().getId(), u.getLocation().getName())
+                        : null,
+
+                u.getDepartment() != null
+                        ? new NamedRefDTO(u.getDepartment().getId(), u.getDepartment().getName())
+                        : null,
+
+                u.getSubdepartment() != null
+                        ? new NamedRefDTO(u.getSubdepartment().getId(), u.getSubdepartment().getName())
+                        : null
+        );
+    }
+
+    @Transactional
+    public UserListItemDTO putUserById(Long id, PutUserRequestDTO dto) {
+
+        User user = repo.findById(id)
+                .orElseThrow(() -> new RuntimeException("User not found with id: " + id));
+
+        // --- userId (editable + unique) ---
+        if (StringUtils.hasText(dto.getUserId())) {
+            String newUserId = dto.getUserId().trim();
+
+            // uniqueness check if changed
+            if (!newUserId.equals(user.getUserId())) {
+                repo.findByUserId(newUserId).ifPresent(existing -> {
+                    if (!existing.getId().equals(user.getId())) {
+                        throw new RuntimeException("userId already exists: " + newUserId);
+                    }
+                });
+            }
+            user.setUserId(newUserId);
+        }
+
+        // --- name ---
+        if (StringUtils.hasText(dto.getName())) {
+            user.setName(dto.getName().trim());
+        }
+
+        // --- email (unique) ---
+        if (StringUtils.hasText(dto.getEmailId())) {
+            String newEmail = dto.getEmailId().trim();
+
+            if (!newEmail.equalsIgnoreCase(user.getEmailId())) {
+                repo.findByEmailId(newEmail).ifPresent(existing -> {
+                    if (!existing.getId().equals(user.getId())) {
+                        throw new RuntimeException("emailId already exists: " + newEmail);
+                    }
+                });
+            }
+            user.setEmailId(newEmail);
+        }
+
+        // --- phone number (validate if provided) ---
+        if (dto.getPhoneNumber() != null) {
+            Long phone = dto.getPhoneNumber();
+            if (phone <= 0) throw new RuntimeException("Phone number must be positive");
+            if (phone < 1000000000L || phone > 9999999999L)
+                throw new RuntimeException("Phone number must be 10 digits");
+            user.setPhoneNumber(phone);
+        }
+
+        // --- role ---
+        if (dto.getRoleId() != null) {
+            Roles role = rolesRepository.findById(dto.getRoleId())
+                    .orElseThrow(() -> new RuntimeException("Invalid roleId: " + dto.getRoleId()));
+            user.setRole(role);
+        }
+
+        // --- country ---
+        if (dto.getCountryId() != null) {
+            CountryCode country = countryCodeRepository.findById(dto.getCountryId())
+                    .orElseThrow(() -> new RuntimeException("Invalid countryId: " + dto.getCountryId()));
+            user.setCountry(country);
+        }
+
+        // --- location (IMPORTANT: null means "don’t update", so only update if not null) ---
+        if (dto.getLocationId() != null) {
+            Location loc = locationRepository.findById(dto.getLocationId())
+                    .orElseThrow(() -> new RuntimeException("Invalid locationId: " + dto.getLocationId()));
+            user.setLocation(loc);
+        }
+
+        // --- department ---
+        Department dept = null;
+        if (dto.getDepartmentId() != null) {
+            dept = departmentRepository.findById(dto.getDepartmentId())
+                    .orElseThrow(() -> new RuntimeException("Invalid departmentId: " + dto.getDepartmentId()));
+            user.setDepartment(dept);
+        } else {
+            // not updating department, keep existing
+            dept = user.getDepartment();
+        }
+
+        // --- subdepartment ---
+        if (dto.getSubdepartmentId() != null) {
+            SubDepartment sub = subDepartmentRepository.findById(dto.getSubdepartmentId())
+                    .orElseThrow(() -> new RuntimeException("Invalid subdepartmentId: " + dto.getSubdepartmentId()));
+
+            // Optional check: if dept exists (either updated or existing), ensure relation matches
+            if (dept != null && sub.getDepartment() != null && !sub.getDepartment().getId().equals(dept.getId())) {
+                throw new RuntimeException("subdepartmentId does not belong to departmentId");
+            }
+
+            user.setSubdepartment(sub);
+        }
+
+        // --- active ---
+        if (dto.getActive() != null) {
+            user.setActive(dto.getActive());
+        }
+
+        // --- audit ---
+        String adminUserId = getCurrentAdminUserId();
+        user.setUpdatedBy(adminUserId);
+
+        repo.save(user);
+
+        // re-fetch with refs so response matches GET (nested objects)
+        User full = repo.findById(user.getId())
+                .orElseThrow(() -> new RuntimeException("User not found after update"));
+
+        return toUserListItemDTO(full);
+    }
+
+}
+
+
+
+
+@Service
+public class DropdownService {
+    @Autowired
+    private CountryCodeRepository countryCodeRepository;
+    @Autowired
+    private RolesRepository rolesRepository;
+
+    @Autowired
+    private LocationRepository locationRepository;
+
+    @Autowired
+    private DepartmentRepository departmentRepository;
+
+    @Autowired
+    private SubDepartmentRepository subDepartmentRepository;
+
+
+    @Autowired
+    RoleService roleService;
+    public DropdownResponse getAllDropdowns(){
+        DropdownResponse response = new DropdownResponse();
+
+        response.setCountryCodes(countryCodeRepository.findAll());
+        List<Roles> roles = rolesRepository.findAll();
+        List<DropdownResponse.RoleResponseDTO> roleDtos = roles.stream()
+                .map(r -> new DropdownResponse.RoleResponseDTO(r.getId(), r.getRole()))
+                .toList();
+
+        response.setRoles(roleDtos);
+
+        response.setLocations(locationRepository.findAll());
+        response.setDepartments(departmentRepository.findAll());
+
+        // map: departmentName → list of subDepartments
+        Map<String, List<SubDepartment>> subDept = subDepartmentRepository.findAll().stream()
+                .collect(Collectors.groupingBy(sd -> sd.getDepartment().getName()));
+
+        response.setSubDepartments(subDept);
+        return response;
+    }
+
+
+    public DropdowneditResponse geteditdropdown(){
+        List<Roles> roles = rolesRepository.findAll();
+        List<DropdownResponse.RoleResponseDTO> roleDtos = roles.stream()
+                .map(r -> new DropdownResponse.RoleResponseDTO(r.getId(), r.getRole()))
+                .toList();
+        List<GetAllModuleChildModuleResponse> modulesWithChildren =
+                Optional.ofNullable(roleService.getAllModuleChildModuleResponse())
+                        .orElseGet(Collections::emptyList);
+
+
+
+        return DropdowneditResponse.builder()
+                .rolesList(roleDtos)
+                .getAllModuleChildModuleResponseList(modulesWithChildren)
+                .build();
+    }
+}
+
