@@ -1,0 +1,95 @@
+POST http://localhost:8080/user_management/createrole
+{
+  "role": "TEST_ROLE16",
+  "moduleChildModule": [{
+    "module": 1,
+    
+"childModule": [
+        {
+          "id": 1,
+          "action": {
+            "activate/deactivate": false
+          }
+        }
+      ]
+ 
+  }]
+}
+ 
+ 
+PUT http://localhost:8080/user_management/users/2
+ 
+{
+    "userId" : "128000",
+  "name": "Updated Name 2",
+  "emailId": "updated@gmail.com"
+ 
+}
+ 
+ 
+GET http://localhost:8080/user_management/users
+ 
+PATCH http://localhost:8080/user_management/users/128006/status
+ 
+{
+    "active" : false
+}
+ 
+POST http://localhost:8080/auth_user/register
+ 
+{
+  "userId": "128007",
+  "emailId": "test7@gmail.com",
+  "phoneNumber": "5555555555",
+  "name": "GAP",
+ 
+  "roleId": 3,
+  "countryId": 17,
+ 
+  "locationId": 2,
+  "departmentId": 2,
+  "subdepartmentId": 3
+}
+ 
+ 
+PUT http://localhost:8080/user_management/1
+{
+  "role": "TEST_ROLE16",
+  "moduleChildModule": [{
+    "module": 1,
+    
+"childModule": [
+        {
+          "id": 1,
+          "action": {
+            "activate/deactivate": false
+          }
+        }
+      ]
+ 
+  }]
+}
+ 
+ 
+PATCH http://localhost:8080/user_management/roles/status/2
+{
+    "active" : true
+}
+ 
+GET http://localhost:8080/user_management/getallmodulechildmodules
+ 
+GET http://localhost:8080/user_management/getallroles
+ 
+GET http://localhost:8080/user_management/editall
+ 
+GET http://localhost:8080/user_management/all
+ send data in json format 
+ 
+create user page
+
+load all dropdown data from 
+
+GET http://localhost:8080/user_management/all
+
+For departments when the user selects the HR department then display only the sub‑departments that belong to that department
+ 
