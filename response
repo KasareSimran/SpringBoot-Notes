@@ -1,0 +1,109 @@
+{
+    "success": true,
+    "message": "Login successful",
+    "data": {
+        "name": "Simran",
+        "role": {
+            "role": "ADMIN",
+            "moduleChildModule": [
+                {
+                    "moduleId": 3,
+                    "moduleName": "DashBoard",
+                    "childModules": [
+                        {
+                            "childModuleId": 4,
+                            "childModuleName": "Reports",
+                            "actions": [
+                                {
+                                    "actionId": 21,
+                                    "actionName": "Download Reports"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "status": "SUCCESS",
+        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjg3MTMiLCJpYXQiOjE3Njk3OTU4ODIsImV4cCI6MTc2OTg4MjI4Miwicm9sZSI6IkFETUlOIiwibW9kdWxlcyI6W3sibW9kdWxlSWQiOjMsImNoaWxkTW9kdWxlcyI6W3siY2hpbGRNb2R1bGVJZCI6NCwiYWN0aW9uSWRzIjpbMjFdfV19XX0.NujN-zo3tspSdCKKjYChlV_jF0EdOqyfppqt602xU_E",
+        "userId": "128713"
+    }
+}
+
+
+
+{
+    "success": true,
+    "message": "Success",
+    "data": [
+        {
+            "moduleId": 1,
+            "moduleName": "User Management",
+            "childModules": [
+                {
+                    "childModuleId": 1,
+                    "childModuleName": "Users Sheet",
+                    "actions": [
+                        {
+                            "actionId": 17,
+                            "actionName": "Activate/Deactivate User"
+                        },
+                        {
+                            "actionId": 15,
+                            "actionName": "Create User"
+                        },
+                        {
+                            "actionId": 16,
+                            "actionName": "Edit User"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "moduleId": 2,
+            "moduleName": "Role Management",
+            "childModules": [
+                {
+                    "childModuleId": 2,
+                    "childModuleName": "Roles Sheet",
+                    "actions": [
+                        {
+                            "actionId": 20,
+                            "actionName": "Activate/Deactivate Role"
+                        },
+                        {
+                            "actionId": 18,
+                            "actionName": "Create Role"
+                        },
+                        {
+                            "actionId": 19,
+                            "actionName": "Edit Role"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "moduleId": 3,
+            "moduleName": "DashBoard",
+            "childModules": [
+                {
+                    "childModuleId": 3,
+                    "childModuleName": "DashBoard",
+                    "actions": []
+                },
+                {
+                    "childModuleId": 4,
+                    "childModuleName": "Reports",
+                    "actions": [
+                        {
+                            "actionId": 21,
+                            "actionName": "Download Reports"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
