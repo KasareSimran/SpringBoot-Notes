@@ -1,0 +1,324 @@
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.stereotype.Component;
+
+import javax.crypto.SecretKey;
+import java.security.Key;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * This class manages JWT token generation, validation and expiration
+ * @author Vandana Pal
+ */
+
+@Component
+public class JwtUtil {
+
+    @Value("${jwt.secret}")
+    private String secret;
+
+    // ------------------ Generate Token ------------------
+    public String generateToken(String username, String roleName, List<ModuleChildModuleDTO> modules) {
+
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", roleName);
+        claims.put("modules", modules);
+//        claims.put("name",name);
+
+        return Jwts.builder()
+                .subject(username)
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 12))
+                .claims(claims)                // e.g., ["ADMIN", "USER"]    
+                .signWith(getSigningKey())
+                .compact();
+    }
+
+    // ------------------ Extract Username ------------------
+    public String extractUsername(String token) {
+        return getClaims(token).getSubject();
+    }
+
+    // ------------------ Extract All Claims ------------------
+    private Claims getClaims(String token) {
+        return Jwts.parser()
+                .verifyWith((SecretKey) getSigningKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+    }
+
+    // ------------------ Validate Token ------------------
+    public boolean validateToken(String token, UserDetails userDetails) {
+        String username = extractUsername(token);
+        return username.equals(userDetails.getUsername());
+    }
+
+    private Key getSigningKey() {
+        byte[] keyBytes = Decoders.BASE64.decode(secret);
+        return Keys.hmacShaKeyFor(keyBytes);
+    }
+
+    // Extract expiration as epoch seconds (for logout blacklist)
+    public long getExpirationEpochSeconds(String token) {
+        return getClaims(token).getExpiration().toInstant().getEpochSecond();
+    }
+
+}
+
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+@Configuration
+public class CommonConfig {
+
+    //Below method is to disable security i.e. to deactivate lgoin page
+   /* @Bean
+    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+                // Allow *everything*
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                // Disable CSRF if you're doing state-less APIs or testing
+                .csrf(csrf -> csrf.disable())
+                // Disable form login
+                .formLogin(form -> form.disable())
+                // Disable HTTP Basic
+                .httpBasic(Customizer.withDefaults()); // or .httpBasic(http -> http.disable())
+
+        return http.build();
+    }*/
+
+    @Bean
+    WebMvcConfigurer corsConfigurer(){
+        return new WebMvcConfigurer() {
+            @Override
+            public void addCorsMappings(CorsRegistry registry) {
+                registry.addMapping("/**")
+                        .allowedMethods("GET","POST","PUT","DELETE","PATCH","OPTIONS");
+            }
+        };
+    }
+
+}
+
+
+
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class JacksonConfig {
+
+    @Bean
+    public ObjectMapper objectMapper() {
+        return new ObjectMapper()
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    }
+}
+
+
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.MalformedJwtException;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+
+import static org.unbescape.json.JsonEscape.escapeJson;
+
+/**
+ * Filter responsible for validating JWT tokens for each incoming HTTP request.
+ *
+ * It intercepts requests, extracts the JWT from the Authorization header,
+ * validates the token, and sets the authentication context if the token is valid.
+ *
+ * This filter is executed once per request as part of the Spring Security filter chain.
+ *
+ * @author Vandana Pal
+ */
+
+@Component
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private static final Logger logger = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private CustomUserDetailsService userDetailsService;
+
+    @Autowired
+    private TokenBlacklistService tokenBlacklistService;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
+
+        String username = null;
+
+        String header = request.getHeader("Authorization");
+
+        logger.info("************* header info from Authorization {} ",header);
+        if (header == null || !header.startsWith("Bearer ")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        String token = header.substring(7);
+        logger.info("************* token info substring {} ",token);
+
+        // Block logged-out tokens
+        if (tokenBlacklistService.isBlacklisted(token)) {
+            sendErrorResponse(response, "Token is invalidated (logged out). Please login again.");
+            return;
+        }
+        try {
+               username = jwtUtil.extractUsername(token);
+
+            if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+
+                if (jwtUtil.validateToken(token, userDetails)) {
+                    UsernamePasswordAuthenticationToken auth =
+                            new UsernamePasswordAuthenticationToken(
+                                    userDetails, null, userDetails.getAuthorities());
+
+                    SecurityContextHolder.getContext().setAuthentication(auth);
+                }
+            }
+            filterChain.doFilter(request, response);
+        }catch (ExpiredJwtException ex){
+            sendErrorResponse(response, "JWT Token Expired. Please re-login");
+        } catch (MalformedJwtException ex){
+            sendErrorResponse(response, "Malformed Token");
+        }catch (IllegalArgumentException ex){
+            sendErrorResponse(response, "Invalid Token. Token is Empty or null");
+        }
+    }
+
+    private void sendErrorResponse(HttpServletResponse response, String message) throws IOException {
+        if (response.isCommitted()) {
+            return; // don't write twice
+        }
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("WWW-Authenticate", "Bearer"); // helps clients understand auth scheme
+
+        // Build proper JSON (simple and safe)
+        String body = String.format(
+                "{ \"error\": \"%s\", \"message\": \"%s\", \"status\": %d, \"timestamp\": \"%s\" }",
+                escapeJson("Invalid Token"), escapeJson(message), HttpServletResponse.SC_UNAUTHORIZED, java.time.Instant.now().toString()
+        );
+        response.getWriter().write(body);
+        response.getWriter().flush();
+    }
+}
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+/**
+ * This is Security Configuration class which handles user permissions and role based access
+ * @author Vandana Pal
+ */
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+
+    @Autowired
+    private JwtAuthenticationFilter jwtFilter;
+
+    @Bean
+    public PasswordEncoder passwordEncoder(){
+        return new BCryptPasswordEncoder();
+    }
+
+    /*@Bean
+    public PasswordEncoder passwordEncoder(){
+        return new IteratedSha256PasswordEncoder(150_000);
+    }*/
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+       return http
+                .csrf(csrf -> csrf.disable())
+               .cors(cors->{})
+                .authorizeHttpRequests(auth -> auth
+                        //.requestMatchers("/addNewDemand/**").permitAll()
+				.requestMatchers("/addNewDemand/**").authenticated()
+                        .requestMatchers("/talent_dashboard/**").authenticated()
+                        .requestMatchers("/profile_tracker/**").authenticated()
+                        .requestMatchers("/auth_user/**").permitAll()
+                        .requestMatchers("/auth_user/login", "/auth_user/forgot-password", "/auth_user/change-password").permitAll()
+                        .requestMatchers("/auth_user/register").authenticated()
+                        .requestMatchers("/api/**").authenticated() //add roleBased permissions here
+                        .requestMatchers("/user_management/**").authenticated()
+                        .requestMatchers("/dummy/**").permitAll()
+                        .anyRequest().authenticated()
+        )
+               .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+                .build();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+}
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.format.FormatterRegistry;
+import org.springframework.format.datetime.standard.DateTimeFormatterRegistrar;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+
+@Configuration
+public class WebConfig  implements WebMvcConfigurer {
+    @Override
+    public void addFormatters(FormatterRegistry registry) {
+        DateTimeFormatterRegistrar registrar = new DateTimeFormatterRegistrar();
+        registrar.setUseIsoFormat(false);
+        registrar.setDateFormatter(DateTimeFormatter.ofPattern("dd-MMM-yyyy").withLocale(Locale.ENGLISH));
+        registrar.registerFormatters(registry);
+    }
+}
